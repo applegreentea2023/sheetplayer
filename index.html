@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Score Player — upload 樂譜即刻聽</title>
+<style>
+  :root{--bg:#12141a;--panel:#1b1e26;--line:#2b3040;--fg:#e7e9ee;--dim:#8b93a7;--accent:#e5484d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"PingFang HK","Noto Sans TC",system-ui,sans-serif}
+  header{position:sticky;top:0;z-index:9;display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+         padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  #play{width:38px;height:38px;border-radius:50%;border:0;background:var(--accent);color:#fff;font-size:15px;cursor:pointer}
+  #play:disabled{background:#3a4053;cursor:default}
+  .time{font-variant-numeric:tabular-nums;color:var(--dim);min-width:96px}
+  #bar{flex:1;min-width:160px;accent-color:var(--accent)}
+  select,button.ghost{background:#252a36;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+  #score{padding:24px 16px 60vh;display:flex;flex-direction:column;align-items:center;gap:16px}
+  .page{background:#fff;border-radius:6px;box-shadow:0 6px 24px #0008;max-width:900px;width:100%;transition:max-width .15s}
+  .page svg{display:block;width:100%;height:auto}
+  #drop{position:fixed;inset:0;background:#0b0d12e6;display:none;place-items:center;font-size:20px;z-index:20}
+  #drop.on{display:grid}
+  #status{color:var(--dim);font-size:12px}
+  .hl, .hl *{fill:var(--accent) !important;stroke:var(--accent) !important}
+  #empty{color:var(--dim);text-align:center;margin-top:12vh;max-width:520px}
+  #empty b{color:var(--fg)}
+  .part{display:flex;align-items:center;gap:4px;background:#252a36;border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12px}
+  .part select{background:transparent;border:0;padding:2px 0;font-size:12px}
+  .cal{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+  .cal input{width:90px;accent-color:var(--accent)}
+  label.file{background:var(--accent);color:#fff;border-radius:6px;padding:8px 14px;cursor:pointer;font-weight:600}
+  input[type=file]{display:none}
+</style>
+<script type="importmap">
+{"imports":{
+  "spessasynth_lib":"./vendor/spessasynth_lib.js",
+  "spessasynth_core":"./vendor/spessasynth_core.js",
+  "fflate":"./vendor/fflate.js",
+  "stb-vorbis":"./vendor/stb-vorbis.js"
+}}
+</script>
+</head>
+<body>
+<header>
+  <button id="play" disabled>▶</button>
+  <span class="time" id="time">0:00 / 0:00</span>
+  <input type="range" id="bar" value="0" min="0" max="1000" step="1" disabled>
+  <span id="parts"></span>
+  <label class="cal" title="畫面快過聲就向右拖，慢過聲就向左拖">⚖ 對齊
+    <input type="range" id="cal" min="-800" max="800" step="10" value="0"><b id="calv">0ms</b>
+  </label>
+  <select id="speed" title="速度">
+    <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+    <option value="1" selected>1×</option><option value="1.25">1.25×</option>
+    <option value="1.5">1.5×</option>
+  </select>
+  <button class="ghost" id="zin" title="放大">A+</button>
+  <button class="ghost" id="zout" title="縮細">A−</button>
+  <label class="file">上載樂譜／PDF／相片<input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.musicxml,.xml,.mxl,.mei,.abc,.krn,image/*,application/pdf"></label>
+  <button class="ghost" id="diag" title="測試喇叭／音源">🔊 試音</button>
+  <button class="ghost" id="dl" hidden title="認譜結果可以喺 MuseScore 改完再上載">存 MusicXML</button>
+  <span id="status">載入緊 Verovio…</span>
+</header>
+<div id="score"></div>
+<div id="empty">
+  <p><b>掉一份 PDF 或者影張相</b> → 自動認譜 → 即刻用真樂器聲彈返出嚟，跟譜高亮。</p>
+  <p>PDF、JPG、PNG、TIFF、BMP、GIF 都得（影相要整頁影齊、光猛、唔好斜）。</p>
+  <p>已經有 MusicXML（.musicxml / .xml / .mxl / .mei / .abc）就快好多，唔使認譜。</p>
+  <p><button class="ghost" id="demo">試下示範樂譜（Brahms）</button></p>
+</div>
+<div id="drop">放開就載入</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
