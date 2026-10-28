@@ -10,6 +10,7 @@ let tk, ctx, synth, seq, duration = 0, playing = false, lastIds = [], lastXml = 
 let origMidi = null;         // 樂譜原始 MIDI（BasicMIDI），切樂器時用返
 let pendingMidi = null;      // 未入 sequencer 嘅 MIDI（音源未解鎖前先擺住）
 let curName = '';            // 而家首歌嘅檔名（status 用）
+let omrWarn = '';            // server 認譜警告（例：小節線分唔到）
 
 /* 每個聲部各自揀樂器（channel → 'piano' | 'drums' | 'score'）。
    全部喺 MIDI 數據層改：channel.setDrums 會被 sequencer 送嘅 program change 蓋返，靠唔住。 */
@@ -117,6 +118,7 @@ async function loadFile(file) {
   stop();
   origMidi = null;
   calDone = false;
+  omrWarn = '';
   status(`載入中… ${file.name}`);
   let buf = new Uint8Array(await file.arrayBuffer());
   if (IMG_RE.test(file.name)) {                       // PDF／相片 → 交 server 認譜
@@ -131,6 +133,8 @@ async function loadFile(file) {
       throw new Error(`認譜失敗（${r.status}）${txt.slice(0, 200)}`);
     }
     buf = new Uint8Array(await r.arrayBuffer());
+    const warn = r.headers.get('X-Omr-Warning');
+    omrWarn = warn ? decodeURIComponent(warn) : '';
   }
   const xml = unpack(buf);
   if (tk.loadData(xml) !== 1) throw new Error('睇唔明呢份樂譜（支援 MusicXML / .mxl / MEI / ABC）');
@@ -162,7 +166,7 @@ async function startPlayback() {
   }
   $('#bar').disabled = !duration;
   syncUI(0);
-  status(`${curName} · ${tk.getPageCount()} 頁 · ${timeFmt(duration)}`);
+  status(`${curName} · ${tk.getPageCount()} 頁 · ${timeFmt(duration)}` + (omrWarn ? ` · ⚠ ${omrWarn}` : ''));
 }
 
 function b64ToBytes(b64) {
@@ -190,6 +194,7 @@ async function ensureAudio() {
 
 async function toggle() {
   if (!seq || !duration) return;
+  stopAt = 0;                        // 手動播放＝唔再受「只播這一行」限制
   await Promise.race([ctx.resume(), new Promise(r => setTimeout(r, 800))]);   // iOS 有時 resume 會吊住
   if (ctx.state !== 'running') status('🔇 瀏覽器未解鎖音訊：再撳一次播放');
   if (playing) { seq.pause(); playing = false; }
@@ -202,6 +207,7 @@ async function toggle() {
 }
 
 function stop() {
+  stopAt = 0;
   if (seq) { seq.pause(); seq.currentTime = 0; }
   playing = false;
   if ($('#play')) $('#play').textContent = '▶';
@@ -278,6 +284,10 @@ function tick() {
   if (!Number.isFinite(raw)) return;                                  // iOS 有時會畀 NaN
   const t = raw;
   // 唔可以用 seq.paused 判斷「播完」：iOS resume 之後 paused 會忽然 true，會誤判成完結 → 畫面凍結冇高亮
+  if (playing && stopAt && t >= stopAt) {         // 播完呢一行
+    seq.pause(); playing = false; $('#play').textContent = '▶';
+    stopAt = 0;
+  }
   if (playing && t >= duration - 0.05) { playing = false; $('#play').textContent = '▶'; }
   const lag = audioLagMs();
   const heard = playing ? Math.max(0, t - (Number.isFinite(lag) ? lag : 0) / 1000) : t;   // 對齊「聽到的」
@@ -299,14 +309,40 @@ function tick() {
   syncUI(t);
 }
 
-/* ---------- 撳譜跳去某個位 ---------- */
+/* ---------- 撳任何一行 → 由嗰行開始播，播完就停 ---------- */
 
-$('#score').addEventListener('click', e => {
-  const el = e.target.closest('[id]');
-  if (!el || !tk || !duration) return;
-  let ms = 0;
-  try { ms = tk.getTimeForElement(el.id); } catch {}
-  if (ms > 0) seek(ms / 1000);
+let stopAt = 0;                       // >0 = 播到呢個時間就停（「只播這一行」）
+
+function systemStarts() {             // [{ el, start }]，時間由每行第一個小節拎
+  return [...document.querySelectorAll('#score g.system')].map(el => {
+    const m = el.querySelector('g.measure');
+    let start = null;
+    if (m) { try { start = tk.getTimeForElement(m.id); } catch {} }
+    return { el, start };
+  }).filter(s => Number.isFinite(s.start));
+}
+
+$('#score').addEventListener('click', async e => {
+  if (!tk || !duration) return;
+  // SVG 空白位 hit-test 只會命中 <svg> 本身 → 用座標判斷撳中邊一行，唔靠 e.target
+  const hit = [...document.querySelectorAll('#score g.system')].find(el => {
+    const r = el.getBoundingClientRect();
+    return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  });
+  if (!hit) return;
+  if (!seq) { unlockAudio(); await ensureAudio(); await startPlayback(); }
+  const list = systemStarts();
+  const i = list.findIndex(s => s.el === hit);
+  if (i < 0) return;
+  const start = list[i].start / 1000;
+  const end = i + 1 < list.length ? list[i + 1].start / 1000 : duration;
+  stopAt = end - 0.03;
+  seq.currentTime = start;
+  await ctx.resume();
+  seq.play();
+  playing = true;
+  $('#play').textContent = '❚❚';
+  status(`▶ 第 ${i + 1} 行（${timeFmt(start)}–${timeFmt(end)}）`);
 });
 
 /* ---------- UI 接線 ---------- */

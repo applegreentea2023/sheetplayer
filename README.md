@@ -79,6 +79,11 @@ dpkg-deb -x Audiveris-5.11.0-ubuntu24.04-x86_64.deb audiveris    # 內建 JRE，
 
 音色來自 `vendor/TimGM6mb.sf2`（6MB General MIDI soundfont，128 種樂器 + 一套鼓）。
 
+## 撳一行就播嗰行
+
+撳樂譜任何一行（system）→ 由嗰行第一個小節開始播，播到下一行就自動停，status 會顯示「▶ 第 N 行（0:12–0:24）」。
+手動撳播放／停止會清掉呢個限制（變回連續播放）。
+
 ## 快捷鍵
 
 `Space` 播/停 · `←/→` 前後 2 秒 · `A+/A−` 縮放 · 速度 0.5×–1.5×（`playbackRate`，唔影響跟譜對位）
@@ -103,6 +108,23 @@ MusicXML 有寫邊度斷行（`<print new-system="yes">` / `new-page`，Audiveri
    - 實測：整頁 62 音（低音 1）→ 逐行 136 音（高音 71 / 低音 65）、33 小節，約 100 秒。
 3. **唔好做二值化**：黑白 threshold + NEAREST 放大會令 Audiveris 只認到 6 個音。
 4. **歌詞／速度字認唔到**：冇裝 tesseract（Audiveris log: "The collection of supported languages is empty"）。中文歌詞唔會保留，`♩=80` 亦唔會入 MIDI（一律 120 BPM，用速度掣調）。
+
+## worksheet 式排版（練習題一頁 8 條短練習）
+
+兩種情況會自動「逐個 system 重認」再合併：
+1. `collapsed()` — 多譜表但有一行幾乎冇音（低音譜全音符和弦被吞）
+2. `bad_rhythm()` — 有小節長度遠超拍號（例 4/4 但 12、28 拍）＝ 分唔到小節線
+
+PDF 會先用 pymupdf 以 300 DPI 光柵化（最多 8 頁）再逐行切。
+
+實測 Alfred 鼓譜（1 頁 11 條練習）：
+
+| | 音符 | 小節 | 每小節拍數 | 總拍 |
+|---|---|---|---|---|
+| 整頁 | 252 | 40 | `{3,4,10,12,14,28}` ❌ | 263 |
+| 逐行 | ~240 | ~46 | `{4}` ✅ | ~176 |
+
+即係播放長度由 7:07 回到 ~1:30，小節線正常。
 
 ## 認譜準唔準（實測，Brahms 藝術歌曲 3 行譜 / 172 個音）
 

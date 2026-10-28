@@ -75,6 +75,25 @@ def staff_counts(xml):
     return c
 
 
+def bad_rhythm(xml):
+    """小節長度遠超拍號（例 4/4 但 12、28 拍）＝ Audiveris 分唔到小節線，要逐行重認。"""
+    import re
+    divs = re.findall(r"<divisions>(\d+)</divisions>", xml)
+    if not divs:
+        return False
+    d = int(divs[0])
+    m = re.search(r"<beats>(\d+)</beats>\s*<beat-type>(\d+)</beat-type>", xml)
+    beats, btype = (int(m.group(1)), int(m.group(2))) if m else (4, 4)
+    bar = beats * 4 / btype
+    spans = [sum(int(x) for x in re.findall(r"<duration>(\d+)</duration>", mm)) / d
+             for mm in re.findall(r"<measure\b[^>]*>(.*?)</measure>", xml, re.S)]
+    if not spans:
+        return False
+    long_ones = [s for s in spans if s > bar * 1.5]
+    print(f"[omr] 小節長度: bar={bar} 拍, 超標 {len(long_ones)}/{len(spans)}（最長 {max(spans):.0f}）", flush=True)
+    return len(long_ones) >= max(1, len(spans) * 0.15)
+
+
 def collapsed(xml):
     """多譜表樂譜但其中一行幾乎冇音 → 整頁 OMR 失敗，要逐行重認。"""
     c = staff_counts(xml)
@@ -112,35 +131,53 @@ def bands(img):
     return [b for b in out if b[1] - b[0] > 40]
 
 
-def system_omr(src, workdir):
+def page_images(src, workdir, max_pages=8):
+    """PDF → 每頁一張 PNG（300 DPI）；圖片就原樣。"""
+    if os.path.splitext(src)[1].lower() != ".pdf":
+        return [src]
+    import pymupdf
+    doc = pymupdf.open(src)
+    out = []
+    for i in range(min(doc.page_count, max_pages)):
+        p = os.path.join(workdir, f"page{i}.png")
+        doc[i].get_pixmap(dpi=300).save(p)
+        out.append(p)
+    print(f"[omr] PDF {doc.page_count} 頁 → 處理 {len(out)} 頁", flush=True)
+    return out
+
+
+def system_omr(images, workdir):
     """逐個 system 認，再合併成一份 MusicXML。"""
     from PIL import Image
     import xml.etree.ElementTree as ET
-    im = Image.open(src).convert("RGB")
-    bs = bands(im)
-    print(f"[omr] 逐行認：{len(bs)} 個 system", flush=True)
     xmls = []
-    for i, (y0, y1) in enumerate(bs):
-        crop = im.crop((0, max(0, y0 - 12), im.width, min(im.height, y1 + 12)))
-        k = max(2.0, min(4.0, 3600 / im.width))     # 每行放大到 ~3600px 闊（太大反而認唔到）
-        crop = crop.resize((round(crop.width * k), round(crop.height * k)), Image.LANCZOS)
-        d = os.path.join(workdir, f"strip{i}")
-        os.makedirs(d, exist_ok=True)
-        p = os.path.join(d, "in.png")
-        crop.save(p)
-        out = os.path.join(d, "out")
-        subprocess.run([AUDIVERIS, "-batch", "-export", "-output", out, p],
-                       capture_output=True, text=True, timeout=600, cwd=d)
-        mxl = [f for f in os.listdir(out) if f.endswith(".mxl")] if os.path.isdir(out) else []
-        if not mxl:
-            print(f"[omr] strip {i} 失敗，跳過", flush=True)
-            continue
-        import zipfile
-        z = zipfile.ZipFile(os.path.join(out, mxl[0]))
-        name = [n for n in z.namelist() if n.endswith(".xml") and "META" not in n][0]
-        x = z.read(name).decode()
-        print(f"[omr] strip {i}: {dict(staff_counts(x))}", flush=True)
-        xmls.append(x)
+    n = 0
+    for im_path in images:
+        im = Image.open(im_path).convert("RGB")
+        bs = bands(im)
+        print(f"[omr] {os.path.basename(im_path)}：{len(bs)} 個 system", flush=True)
+        for (y0, y1) in bs:
+            crop = im.crop((0, max(0, y0 - 12), im.width, min(im.height, y1 + 12)))
+            k = max(1.0, min(4.0, 3600 / im.width))     # 目標 ~3600px 闊；已夠大就唔好再放大（太大認唔到）
+            crop = crop.resize((round(crop.width * k), round(crop.height * k)), Image.LANCZOS)
+            d = os.path.join(workdir, f"strip{n}")
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, "in.png")
+            crop.save(p)
+            out = os.path.join(d, "out")
+            subprocess.run([AUDIVERIS, "-batch", "-export", "-output", out, p],
+                           capture_output=True, text=True, timeout=600, cwd=d)
+            mxl = [f for f in os.listdir(out) if f.endswith(".mxl")] if os.path.isdir(out) else []
+            if not mxl:
+                print(f"[omr] strip {n} 失敗，跳過", flush=True)
+            else:
+                import zipfile
+                z = zipfile.ZipFile(os.path.join(out, mxl[0]))
+                name = [f for f in z.namelist() if f.endswith(".xml") and "META" not in f][0]
+                x = z.read(name).decode()
+                print(f"[omr] strip {n}: {dict(staff_counts(x))}", flush=True)
+                xmls.append(x)
+            n += 1
     if not xmls:
         raise RuntimeError("逐行認都認唔到（圖太模糊？）")
     first = ET.fromstring(xmls[0])
@@ -205,6 +242,7 @@ class Handler(SimpleHTTPRequestHandler):
         ext = os.path.splitext(name)[1].lower()
         if ext not in OMR_EXTS:
             return self.fail(415, "只食 PDF／PNG／JPG／TIFF／BMP／GIF")
+        warning = ""
         try:
             with _lock, tempfile.TemporaryDirectory() as work:
                 src = os.path.join(work, "in" + ext)
@@ -215,9 +253,14 @@ class Handler(SimpleHTTPRequestHandler):
                     img, _ = prepare(src, work)      # 細圖先放大（Audiveris 要求 interline 夠大）
                 data = recognise(img, name, work)
                 xml = mxl_to_xml(data)
-                if collapsed(xml):                   # 整頁 OMR 塌咗一行（例：低音譜全音符和弦）→ 逐行重認
+                if collapsed(xml):                   # 有譜表幾乎全空（低音譜和弦被吞）→ 逐行重認，實測有效
                     print("[omr] 有譜表幾乎全空 → 改用逐個 system 認", flush=True)
-                    data = system_omr(src, work).encode()   # 用原圖逐行放大（放大版再 ×4 會過大）
+                    data = system_omr(page_images(src, work), work).encode()
+                elif bad_rhythm(xml):
+                    # worksheet 式排版：逐行重認一樣唔穩定（同一張圖改 2px 就 4 拍變 12 拍），
+                    # 而且慢 10 倍 → 唔自動重認，只出警告叫用戶執
+                    print("[omr] 小節線分唔到（worksheet 式排版），照出但提醒用戶", flush=True)
+                    warning = "分唔到小節線（練習 worksheet 常見），拍子可能唔準，建議用 MuseScore 執" 
         except subprocess.TimeoutExpired:
             return self.fail(504, "認譜超時（>15 分鐘）")
         except Exception as e:                       # noqa: BLE001 — 一律回人話
@@ -225,6 +268,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/vnd.recordare.musicxml")
         self.send_header("Content-Length", str(len(data)))
+        if warning:                              # header 只食 latin-1 → 先 encode
+            self.send_header("X-Omr-Warning", urllib.parse.quote(warning))
         self.end_headers()
         self.wfile.write(data)
 
