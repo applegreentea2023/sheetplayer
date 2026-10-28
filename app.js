@@ -122,7 +122,8 @@ async function loadFile(file) {
   if (IMG_RE.test(file.name)) {                       // PDF／相片 → 交 server 認譜
     status(`🔍 認譜中… ${file.name}（大約 10–60 秒，唔好閂窗）`);
     // 相對路徑：本機 serve.py 喺根目錄；擺上 GitHub Pages 就係 /<repo>/api/omr（冇呢個 endpoint）
-    const r = await fetch('api/omr', { method: 'POST', headers: { 'X-Filename': file.name }, body: buf });
+    // header 只可以 ISO-8859-1：中文／emoji 檔名要 encode，唔係 fetch 直接 throw
+    const r = await fetch('api/omr', { method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: buf });
     if (!r.ok) {
       const txt = await r.text();
       if ([404, 405, 501].includes(r.status))

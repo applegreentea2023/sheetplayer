@@ -200,7 +200,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not 0 < n <= MAX_BYTES:
             return self.fail(413, "檔案太大（>40MB）或空")
         payload = self.rfile.read(n)      # 一定要先讀晒 body，否則早回錯誤會 RST 斷線（curl 見 000）
-        name = os.path.basename(self.headers.get("X-Filename", "input.png"))
+        import urllib.parse
+        name = os.path.basename(urllib.parse.unquote(self.headers.get("X-Filename", "input.png")))
         ext = os.path.splitext(name)[1].lower()
         if ext not in OMR_EXTS:
             return self.fail(415, "只食 PDF／PNG／JPG／TIFF／BMP／GIF")
